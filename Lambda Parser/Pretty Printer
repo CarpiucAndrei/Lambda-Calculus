@@ -1,0 +1,267 @@
+import Text.ParserCombinators.Parsec
+import Text.ParserCombinators.Parsec.Char
+import Data.List.Split hiding (oneOf)
+import Data.Char
+
+data Expr = App Expr Expr | Lam Int Expr | Lamish [Int] Expr | Var Int deriving (Show, Eq)
+-- Lam Int Expr |
+
+isVar (Var _) = True
+isVar _ = False
+
+isLam (Lam _ _) = True
+isLam _ = False
+
+isApp (App _ _) = True
+isApp _ = False
+
+freeVariables :: Expr -> [Int]
+freeVariables (Lam x v) = freeVariables (Lamish (x:[]) v)
+
+freeVariables (Lamish xs v) = if (isVar v) == True
+                                then if ((value v) `elem` xs) == True
+                                        then []
+                                     else (value v) : []
+                              else if (isLam v) == True
+                                      then freeVariables (Lamish ((getFirstLam v) ++ xs) (getSecondLam v))
+                              else (freeVariables (Lamish xs (getFirstApp v))) ++ (freeVariables (Lamish xs (getSecondApp v)))
+freeVariables (App e1 e2) = freeVariables e1 ++ freeVariables e2
+freeVariables (Var x) = [x]
+
+value :: Expr -> Int
+value (Var x) = x
+
+getFirstLam (Lam x e2) = x:[]
+getFirstLam1 (Lam x e2) = x
+getFirstApp (App e1 e2) = e1
+getSecondLamish (Lamish xs e2) = e2
+getSecondLam (Lam x e2) = e2
+getSecondApp (App e1 e2) = e2
+
+rename:: Expr -> Int -> Int -> Expr
+rename (App e1 e2) a b = if k == e1
+                              then (App e1 (rename e2 a b))
+                          else (App k e2)
+                          where k = rename e1 a b
+rename (Var x) a b = (Var x)
+rename (Lam x e) a b | x==a = change (Lam x e) a b
+                     | otherwise = (Lam x (rename e a b))
+
+change :: Expr -> Int -> Int -> Expr
+change (Lam x e) a b = if x == a && (isLam e) == False
+                            then (Lam b (change e a b))
+                       else if x /= a && (isLam e) == False
+                               then (Lam x (change e a b))
+                       else if (isLam e) == True
+                               then if getFirstLam1 e == a && x == a
+                                       then (Lam b e)
+                                    else if getFirstLam1 e /= a && x == a
+                                       then (Lam b (change e a b))
+                                    else if getFirstLam1 e == a && x /= a
+                                       then (Lam x e)
+                                    else (Lam x (change e a b) )
+                       else (Lam x e)
+
+change (App e1 e2) a b = (App (change e1 a b) (change e2 a b))
+change (Var x) a b | x==a = (Var b)
+                   | otherwise = (Var x)
+
+removeItem :: Int -> [Int] -> [Int]
+removeItem _ [] = []
+removeItem x (y:ys) | x == y = ys
+                    | otherwise = y : removeItem x ys
+
+substLists :: [Int] -> [Int] -> [Int]
+substLists xs [] = xs
+substLists xs (y:ys) = substLists (removeItem y xs) ys
+
+allVariables :: Expr -> [Int]
+allVariables (Var x) = x : []
+allVariables (App e1 e2) = (allVariables e1) ++ (allVariables e2)
+allVariables (Lam x e) = (allVariables e)
+
+boundVariables :: Expr -> [Int]
+boundVariables e = substLists (allVariables e) (freeVariables e)
+
+helper1 :: Expr -> Int -> Int -> Expr
+helper1 e x y = helper2 (iterate (\e -> (rename e x y)) e)
+
+helper2 (x:y:xs) | x == y = x
+                 | otherwise = helper2 (y:xs)
+
+renameComplete :: Expr -> [Int] -> Int -> Expr
+renameComplete e [] _ = e
+renameComplete e (x:xs) y = renameComplete (helper1 e x y) xs y
+
+alphaEquivalent :: Expr -> Expr -> Bool
+alphaEquivalent e1 e2 = if x1 == x2
+                           then True
+                        else False
+                        where x1 = renameComplete e1 (boundVariables e1) k
+                              x2 = renameComplete e2 (boundVariables e2) k
+                              k = 1 + (maxPair (maximum (allVariables e1)) (maximum (allVariables e2)))
+
+hasRedex :: Expr -> Bool
+hasRedex (App e1 e2) = if isLam  e1 == True && isVar e2 == True
+                          then True
+                       else hasRedex e1 || hasRedex e2
+hasRedex (Var x) = False
+hasRedex (Lam x e) = hasRedex e
+
+maxPair :: Int -> Int -> Int
+maxPair x y | x<y = y
+            | otherwise = x
+
+substitute :: Expr -> Int -> Expr -> Expr
+substitute e1 x e2 = if isLam e1 == True
+                        then if getFirstLam1 e1 == x
+                                then e1
+                             else (Lam k (substitute (getSecondLam (rename e1 (getFirstLam1 e1) k)) x e2))
+                     else  if isVar e1 == True
+                        then if value e1 == x
+                                then e2
+                             else e1
+                     else (App (substitute (getFirstApp e1) x e2) (substitute (getSecondApp e1) x e2))
+                     where k = 1+(maxPair (maximum (x :(allVariables (getSecondLam e1)))) (maximum (allVariables (e2))))
+
+------------Pretty Printing--------------------
+viewVars :: Expr -> [Int]
+viewVars (Lam n a) = n : viewVars a
+viewVars _ = []
+
+viewBody :: Expr -> Expr
+viewBody (Lam _ a) = viewBody a
+viewBody x = x
+
+putInPares :: String -> String
+putInPares e = "(" ++ e ++ ")"
+
+addX :: [Int] -> String
+addX (y:ys) = "x" ++ show y ++ addX ys
+addX [] = []
+
+collapse (x:xs) = x ++ collapse xs
+collapse [] = []
+
+pp ::  Int -> Expr -> String
+pp p (Var x) = "x" ++ show x
+pp p (App e1 e2) = if p>0
+                      then putInPares ((pp (p+1) e1) ++ (pp p e2))
+                   else (pp (p+1) e1) ++ (pp p e2)
+pp p (Lam x e) = if p>0
+                    then putInPares ('\\' : addX (viewVars ((Lam x e))) ++ "->" ++ (pp (p+1) (viewBody e)) )
+                 else '\\' : addX (viewVars (Lam x e)) ++ "->" ++ (pp (p+1) (viewBody e))
+
+prettyPrint :: Expr -> String
+prettyPrint e = pp 0 e
+
+-------------------------------Parser---------------------------------
+data ExtExpr = ExtApp ExtExpr ExtExpr | ExtLam [Int] ExtExpr | ExtVar Int deriving (Show, Eq)
+
+f1 (x:xs) = ',' : ' ' : (intToDigit x) : (f1 xs)
+f1 [] = []
+f2 xs = '[' : (tail (tail (f1 xs)))
+f3 xs = (f2 xs) ++ "]"
+
+showLx (ExtLam is tt) = "(\\" ++ f3 is ++ "->" ++ showLx tt ++ ")"
+showLx (ExtApp aa bb@(ExtApp _ _)) = showLx aa ++ "(" ++ showLx bb ++ ")"
+showLx (ExtApp aa bb) = showLx aa ++ showLx bb
+showLx (ExtVar nn) = show nn
+
+isX :: Char -> Bool
+isX c | c == 'x' = True
+      | otherwise = False
+
+isOk c = (isAlphaNum c) && (not (isX c))
+
+-- myAlphanum :: Parser Char
+myAlphanum = satisfy isOk
+
+-- myIdent :: Parser String
+myIdent = do x <- lower
+             xs <- many1 myAlphanum
+             return (x:xs)
+
+varExpr :: CharParser st ExtExpr
+varExpr = do nn <- myIdent
+             spaces
+             return (ExtVar (read (tail nn) :: Int) )
+
+makeLambda :: [Int] -> ExtExpr -> ExtExpr
+makeLambda is bb = ExtLam is bb
+
+g1 :: [[Char]] -> [Int]
+g1 (xs:xss) = (read (g2 xs)) : (g1 xss)
+g1 [] = []
+
+g2 xs = if isDigit (head xs)
+               then xs
+           else g2 (tail xs)
+
+cell = many1 (noneOf "-")
+
+lambdaExpr :: CharParser st ExtExpr
+lambdaExpr = do char '\\'
+                spaces
+                ns <- cell
+                spaces
+                char '-'
+                char '>'
+                spaces
+                ee <- expr
+                spaces
+                return (makeLambda (g1 (tail (splitOn "x" ns))) ee)
+
+parenExpr = do char '('
+               spaces
+               ee <- expr
+               spaces
+               char ')'
+               spaces
+               return ee
+
+simpleExpr = lambdaExpr <|> parenExpr <|> varExpr
+
+expr = do es <- many1 simpleExpr
+          spaces
+          return $ foldl1 ExtApp es
+
+fullExpr :: CharParser st ExtExpr
+fullExpr = do spaces
+              ee <- expr
+              spaces
+              eof
+              return ee
+
+-- parseLambda :: [Char] -> Maybe LambdaTree
+parseLambda ss = eitherToMaybe (parse fullExpr "error" ss)
+
+eitherToMaybe :: Either a b -> Maybe b
+eitherToMaybe = either (const Nothing) (Just)
+
+---------Combinatory Logic
+data ExprCL = AppCL ExprCL ExprCL | K | S | VarCL Int deriving (Show)
+data ExprLamCL = Lmd Int ExprCL deriving (Show)
+
+freeVariablesCL :: ExprCL -> [Int]
+freeVariablesCL (VarCL x) = x : []
+freeVariablesCL (AppCL e1 e2) = freeVariablesCL e1 ++ freeVariablesCL e2
+
+translate :: Expr -> ExprCL
+translate (Var x) = (VarCL x)
+translate (App e1 e2) = (AppCL (translate e1) (translate e2))
+translate (Lam x e) = if x `elem` (freeVariables e)
+                          then case e of
+                               (Var a) -> (AppCL S (AppCL K K))
+                               (Lam a b) -> translate2 (Lmd x (translate (Lam a b)))
+                               (App e1 e2) -> (AppCL S (AppCL (translate (Lam x e1)) (translate (Lam x e2) )) )
+                      else AppCL K (translate e)
+
+translate2 :: ExprLamCL -> ExprCL
+translate2 (Lmd x e) = if x `elem` (freeVariablesCL e)
+                          then case e of
+                               (VarCL a) -> (AppCL S (AppCL K K))
+                               (AppCL e1 e2) -> (AppCL S (AppCL (translate2 (Lmd x e1)) (translate2 (Lmd x e2) )) )
+                               K -> AppCL K K
+                               S -> AppCL K S
+                        else AppCL K e
